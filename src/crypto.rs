@@ -99,7 +99,7 @@ impl PostQuantumCrypto {
         
         let encrypted_data = cipher.encrypt(nonce, data)
             .expect("encryption failure!");
-        encrypted.extend(encrypted_data.clone());
+        encrypted.extend(encrypted_data);
         
         println!("Encryption details:");
         println!("  Ciphertext length: {}", ciphertext.as_bytes().len());
@@ -125,6 +125,7 @@ impl PostQuantumCrypto {
         let (ciphertext, rest) = encrypted.split_at(ciphertext_len);
         let (nonce, aes_ciphertext) = rest.split_at(12);
 
+        println!("  Actual ciphertext length: {}", ciphertext.len());
         println!("  Nonce length: {}", nonce.len());
         println!("  AES ciphertext length: {}", aes_ciphertext.len());
 
@@ -629,6 +630,12 @@ mod tests {
         let decrypted_incorrect = PostQuantumCrypto::decrypt(&encrypted, &incorrect_key);
         println!("Decrypted message with incorrect key: {:?}", decrypted_incorrect);
         assert!(decrypted_incorrect.is_empty(), "Decryption with incorrect key should fail");
+
+        // Print Kyber ciphertext details
+        println!("\nKyber ciphertext details:");
+        let kyber_ciphertext = &encrypted[..kyber768::ciphertext_bytes()];
+        println!("Kyber ciphertext length: {}", kyber_ciphertext.len());
+        println!("Kyber ciphertext: {:?}", kyber_ciphertext);
     }
 
     #[test]

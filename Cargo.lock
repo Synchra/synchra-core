@@ -506,6 +506,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hybrid-array"
+version = "0.2.0-rc.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bae36f8710514b3e7aab028021733330de6e455e0352e19c6dd4513eecb7aa9a"
+dependencies = [
+ "typenum",
+]
+
+[[package]]
 name = "ident_case"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -557,6 +566,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "kem"
+version = "0.3.0-pre.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b8645470337db67b01a7f966decf7d0bafedbae74147d33e641c67a91df239f"
+dependencies = [
+ "rand_core 0.6.4",
+ "zeroize",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.158"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -567,6 +586,18 @@ name = "md5"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
+
+[[package]]
+name = "ml-kem"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97befee0c869cb56f3118f49d0f9bb68c9e3f380dec23c1100aedc4ec3ba239a"
+dependencies = [
+ "hybrid-array",
+ "kem",
+ "rand_core 0.6.4",
+ "sha3",
+]
 
 [[package]]
 name = "num"
@@ -1044,6 +1075,7 @@ dependencies = [
  "byteorder",
  "hex",
  "md5",
+ "ml-kem",
  "num-bigint 0.4.6",
  "num-complex",
  "pqcrypto-kyber",

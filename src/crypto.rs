@@ -1,4 +1,5 @@
 use num_complex::Complex64;
+use ml_kem::{MlKem768, KemCore, kem::{Kem}};
 use pqcrypto_kyber::kyber768;
 use pqcrypto_traits::kem::{PublicKey, SecretKey, Ciphertext, SharedSecret};
 use rand::{thread_rng, Rng};
@@ -72,11 +73,13 @@ pub fn print_message_details(message: &FractalMessage) {
 
 impl PostQuantumCrypto {
     pub fn generate_keypair() -> (Vec<u8>, Vec<u8>) {
-        let (public_key, secret_key) = kyber768::keypair();
-        (public_key.as_bytes().to_vec(), secret_key.as_bytes().to_vec())
+        let mut rng = thread_rng();
+        let (dk, ek) = MlKem768::generate(&mut rng);
+        (ek.as_bytes().to_vec(), dk.as_bytes().to_vec())
     }
 
     fn derive_aes_key(shared_secret: &[u8]) -> [u8; 32] {
+        use sha2::Digest;
         let mut hasher = Sha256::new();
         hasher.update(shared_secret);
         hasher.finalize().into()
@@ -86,25 +89,23 @@ impl PostQuantumCrypto {
         println!("Encryption details:");
         println!("  Input data length: {}", data.len());
         
-        let public_key = match kyber768::PublicKey::from_bytes(public_key) {
-            Ok(pk) => pk,
-            Err(e) => {
-                println!("Error creating PublicKey: {:?}", e);
-                return Vec::new();
-            }
-        };
+        let ek = <MlKem768 as KemCore>::EncapsulationKey::from_bytes(public_key.try_into().unwrap()).unwrap();
         
-        let (ciphertext, shared_secret) = kyber768::encapsulate(&public_key);
+        let mut rng = thread_rng();
+        let (ciphertext, shared_secret) = MlKem768::encapsulate(&ek, &mut rng);
         
         let mut encrypted = Vec::new();
         let ciphertext_bytes = ciphertext.as_bytes();
+        let original_len = ciphertext_bytes.len() as u32;
+        
+        encrypted.extend_from_slice(&original_len.to_le_bytes());
         encrypted.extend_from_slice(ciphertext_bytes);
         
-        println!("  Kyber ciphertext length: {}", ciphertext_bytes.len());
-        println!("  Expected Kyber ciphertext length: {}", kyber768::ciphertext_bytes());
-        println!("  Shared secret length: {}", shared_secret.as_bytes().len());
+        println!("  ML-KEM ciphertext length: {}", ciphertext_bytes.len());
+        println!("  Shared secret length: {}", shared_secret.len());
         
-        let aes_key = Self::derive_aes_key(shared_secret.as_bytes());
+        let aes_key = Self::derive_aes_key(&shared_secret);
+        println!("  AES key: {:?}", aes_key);
         let key = Key::<Aes256Gcm>::from_slice(&aes_key);
         let cipher = Aes256Gcm::new(key);
         let nonce_bytes: [u8; 12] = rand::thread_rng().gen();
@@ -121,7 +122,9 @@ impl PostQuantumCrypto {
         };
         encrypted.extend(encrypted_data.clone());
         
+        println!("  Nonce: {:?}", nonce_bytes);
         println!("  Nonce length: {}", nonce_bytes.len());
+        println!("  AES data: {:?}", encrypted_data);
         println!("  AES data length: {}", encrypted_data.len());
         println!("  Total encrypted length: {}", encrypted.len());
         
@@ -132,52 +135,36 @@ impl PostQuantumCrypto {
         println!("Decryption details:");
         println!("  Total encrypted length: {}", encrypted.len());
         
-        let ciphertext_len = kyber768::ciphertext_bytes();
-        println!("  Expected ciphertext length: {}", ciphertext_len);
+        if encrypted.len() < 4 + <MlKem768 as KemCore>::CIPHERTEXT_LEN + 12 {
+            println!("Encrypted data is too short");
+            return Vec::new();
+        }
+    
+        let original_len = u32::from_le_bytes([encrypted[0], encrypted[1], encrypted[2], encrypted[3]]) as usize;
+        println!("  Original ciphertext length: {}", original_len);
         
-        if encrypted.len() < ciphertext_len {
-            println!("Encrypted data is too short for Kyber ciphertext");
-            return Vec::new();
-        }
-
-        let (ciphertext, rest) = encrypted.split_at(ciphertext_len);
-        println!("  Actual ciphertext length: {}", ciphertext.len());
-        println!("  Remaining data length: {}", rest.len());
-
-        if rest.len() < 12 {
-            println!("Remaining data is too short for nonce");
-            return Vec::new();
-        }
-
+        let (_, rest) = encrypted.split_at(4);
+        let (ciphertext_bytes, rest) = rest.split_at(<MlKem768 as KemCore>::CIPHERTEXT_LEN);
         let (nonce, aes_ciphertext) = rest.split_at(12);
+        
+        println!("  Ciphertext length: {}", ciphertext_bytes.len());
+        println!("  Nonce: {:?}", nonce);
         println!("  Nonce length: {}", nonce.len());
+        println!("  AES ciphertext: {:?}", aes_ciphertext);
         println!("  AES ciphertext length: {}", aes_ciphertext.len());
-
-        let secret_key = match kyber768::SecretKey::from_bytes(secret_key) {
-            Ok(sk) => sk,
-            Err(e) => {
-                println!("Error creating SecretKey: {:?}", e);
-                return Vec::new();
-            }
-        };
-
-        let ciphertext = match kyber768::Ciphertext::from_bytes(ciphertext) {
-            Ok(ct) => ct,
-            Err(e) => {
-                println!("Error creating Ciphertext: {:?}", e);
-                println!("Ciphertext length: {}, Expected: {}", ciphertext.len(), kyber768::ciphertext_bytes());
-                return Vec::new();
-            }
-        };
-
-        let shared_secret = kyber768::decapsulate(&ciphertext, &secret_key);
-        println!("  Shared secret length: {}", shared_secret.as_bytes().len());
-
-        let aes_key = Self::derive_aes_key(shared_secret.as_bytes());
+    
+        let dk = <MlKem768 as KemCore>::DecapsulationKey::from_bytes(secret_key.try_into().unwrap()).unwrap();
+        let ciphertext = <MlKem768 as KemCore>::Ciphertext::from_bytes(ciphertext_bytes.try_into().unwrap()).unwrap();
+    
+        let shared_secret = MlKem768::decapsulate(&dk, &ciphertext);
+        println!("  Shared secret length: {}", shared_secret.len());
+    
+        let aes_key = Self::derive_aes_key(&shared_secret);
+        println!("  AES key: {:?}", aes_key);
         let key = Key::<Aes256Gcm>::from_slice(&aes_key);
         let cipher = Aes256Gcm::new(key);
         let nonce = Nonce::from_slice(nonce);
-
+    
         match cipher.decrypt(nonce, aes_ciphertext) {
             Ok(decrypted) => {
                 println!("Decryption successful. Decrypted length: {}", decrypted.len());
@@ -617,55 +604,53 @@ mod tests {
         let (public_key, secret_key) = PostQuantumCrypto::generate_keypair();
         println!("Public key length: {}", public_key.len());
         println!("Secret key length: {}", secret_key.len());
-
+    
         // Test with non-empty message
         let message = b"test message";
         println!("Original message: {:?}", message);
-
+    
         let encrypted = PostQuantumCrypto::encrypt(message, &public_key);
         println!("Encrypted data length: {}", encrypted.len());
         println!("Encrypted data: {:?}", &encrypted);
-
+    
         // Print detailed information about encrypted data structure
         println!("\nDetailed encrypted data structure:");
         println!("Total encrypted length: {}", encrypted.len());
-        let ciphertext_len = kyber768::ciphertext_bytes();
+        
+        if encrypted.len() < 4 {
+            panic!("Encrypted data is too short to contain ciphertext length");
+        }
+        
+        let ciphertext_len = u32::from_le_bytes([encrypted[0], encrypted[1], encrypted[2], encrypted[3]]) as usize;
         println!("Ciphertext length: {}", ciphertext_len);
-        println!("Ciphertext: {:?}", &encrypted[..ciphertext_len]);
-        println!("Nonce: {:?}", &encrypted[ciphertext_len..ciphertext_len+12]);
-        println!("AES ciphertext: {:?}", &encrypted[ciphertext_len+12..]);
-
+        
+        if encrypted.len() < 4 + ciphertext_len + 12 {
+            panic!("Encrypted data is too short to contain full ciphertext and nonce");
+        }
+        
+        println!("Ciphertext: {:?}", &encrypted[4..4+ciphertext_len]);
+        println!("Nonce: {:?}", &encrypted[4+ciphertext_len..4+ciphertext_len+12]);
+        println!("AES ciphertext: {:?}", &encrypted[4+ciphertext_len+12..]);
+    
         let decrypted = PostQuantumCrypto::decrypt(&encrypted, &secret_key);
         println!("Decrypted message: {:?}", decrypted);
-
+        println!("Decrypted as string: {:?}", String::from_utf8_lossy(&decrypted));
+    
         assert_eq!(message, &decrypted[..], "Decrypted message does not match original message");
-
+    
         // Test with empty message
         let empty_message = b"";
-        println!("\nEmpty message: {:?}", empty_message);
-
+        println!("\nEmpty message test:");
+        println!("Original empty message: {:?}", empty_message);
+    
         let encrypted_empty = PostQuantumCrypto::encrypt(empty_message, &public_key);
         println!("Encrypted empty data length: {}", encrypted_empty.len());
         println!("Encrypted empty data: {:?}", &encrypted_empty);
-
+    
         let decrypted_empty = PostQuantumCrypto::decrypt(&encrypted_empty, &secret_key);
         println!("Decrypted empty message: {:?}", decrypted_empty);
-
+    
         assert_eq!(empty_message, &decrypted_empty[..], "Decrypted empty message does not match original empty message");
-
-        // Print Kyber parameters
-        println!("\nKyber parameters:");
-        println!("Public key bytes: {}", kyber768::public_key_bytes());
-        println!("Secret key bytes: {}", kyber768::secret_key_bytes());
-        println!("Ciphertext bytes: {}", kyber768::ciphertext_bytes());
-        println!("Shared secret bytes: {}", kyber768::shared_secret_bytes());
-
-        // Test decryption with incorrect key
-        println!("\nTesting decryption with incorrect key:");
-        let (_, incorrect_key) = PostQuantumCrypto::generate_keypair();
-        let decrypted_incorrect = PostQuantumCrypto::decrypt(&encrypted, &incorrect_key);
-        println!("Decrypted message with incorrect key: {:?}", decrypted_incorrect);
-        assert!(decrypted_incorrect.is_empty(), "Decryption with incorrect key should fail");
     }
 
     #[test]

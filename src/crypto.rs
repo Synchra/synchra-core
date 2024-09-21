@@ -179,17 +179,26 @@ impl FractalCipher {
 
     pub fn fie_encode(&self, data: &[u8]) -> Vec<u8> {
         let mut encoded = Vec::new();
+        let mut buffer = [0u8; 16];
         for chunk in data.chunks(16) {
-            let complex_chunk = self.bytes_to_complex(chunk);
+            buffer.fill(0);
+            buffer[..chunk.len()].copy_from_slice(chunk);
+            let complex_chunk = self.bytes_to_complex(&buffer);
             println!("Encoding - Input complex: {:?}", complex_chunk);
             let mapped = self.julia_map(complex_chunk);
             println!("Encoding - Mapped complex: {:?}", mapped);
             encoded.extend_from_slice(&self.complex_to_bytes(mapped));
         }
+        encoded.push(data.len() as u8); // Add original length as last byte
         encoded
     }
 
     pub fn fie_decode(&self, encoded: &[u8]) -> Vec<u8> {
+        if encoded.is_empty() {
+            return Vec::new();
+        }
+        let original_len = *encoded.last().unwrap() as usize;
+        let encoded = &encoded[..encoded.len() - 1]; // Remove length byte
         let mut decoded = Vec::new();
         for chunk in encoded.chunks(16) {
             let complex_chunk = self.bytes_to_complex(chunk);
@@ -198,7 +207,7 @@ impl FractalCipher {
             println!("Decoding - Unmapped complex: {:?}", unmapped);
             decoded.extend_from_slice(&self.complex_to_bytes(unmapped));
         }
-        decoded.truncate(encoded.len());  // Ensure we don't add extra nulls
+        decoded.truncate(original_len);
         decoded
     }
 

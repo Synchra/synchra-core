@@ -110,7 +110,7 @@ impl PostQuantumCrypto {
         let ciphertext_len = kyber768::ciphertext_bytes();
         
         if encrypted.len() < ciphertext_len {
-            panic!("Encrypted data is too short. Length: {}, Expected at least: {}", encrypted.len(), ciphertext_len);
+            return Vec::new(); // Return empty vector if data is too short
         }
         
         let (ciphertext, rest) = encrypted.split_at(ciphertext_len);
@@ -118,8 +118,12 @@ impl PostQuantumCrypto {
         let ciphertext = kyber768::Ciphertext::from_bytes(ciphertext).unwrap();
         let shared_secret = kyber768::decapsulate(&ciphertext, &secret_key);
         
-        if rest.len() < 12 {
+        if rest.is_empty() {
             return Vec::new(); // Return empty vector if there's no AES data
+        }
+        
+        if rest.len() < 12 {
+            return Vec::new(); // Return empty vector if AES data is too short
         }
         
         let (nonce, aes_ciphertext) = rest.split_at(12);

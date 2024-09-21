@@ -491,10 +491,14 @@ mod tests {
         let key = b"SecretKey123";
 
         let encrypted = fractal_cipher.encrypt(original_data, key);
-        let decrypted = fractal_cipher.decrypt(&encrypted, key);
+        let decrypted = fractal_cipher.decrypt(&encrypted, b"SecretKey123");
+        let bad_decrypted = fractal_cipher.decrypt(&encrypted, b"SecretKey123_");
 
         assert_eq!(original_data, &decrypted[..], 
             "Encryption/Decryption failed");
+
+        assert!(original_data != &bad_decrypted[..], 
+            "Bad Key - Encryption/Decryption failed");
     }
 
     #[test]
@@ -543,24 +547,24 @@ mod tests {
         assert_eq!(plaintext, &decrypted[..]);
     }
 
-    // #[test]
-    // fn test_detailed_encrypt_decrypt() {
-    //     let (public_key, secret_key) = PostQuantumCrypto::generate_keypair();
-    //     println!("Public key length: {}", public_key.len());
-    //     println!("Secret key length: {}", secret_key.len());
+    #[test]
+    fn test_detailed_encrypt_decrypt() {
+        let (public_key, secret_key) = PostQuantumCrypto::generate_keypair();
+        println!("Public key length: {}", public_key.len());
+        println!("Secret key length: {}", secret_key.len());
 
-    //     let message = b"test message";
-    //     println!("Original message: {:?}", message);
+        let message = b"test message";
+        println!("Original message: {:?}", message);
 
-    //     let encrypted = PostQuantumCrypto::encrypt(message, &public_key);
-    //     println!("Encrypted data length: {}", encrypted.len());
-    //     println!("Encrypted data: {:?}", &encrypted[..20]); // Mostrar solo los primeros 20 bytes
+        let encrypted = PostQuantumCrypto::encrypt(message, &public_key);
+        println!("Encrypted data length: {}", encrypted.len());
+        println!("Encrypted data: {:?}", &encrypted[..20]); // Mostrar solo los primeros 20 bytes
 
-    //     let decrypted = PostQuantumCrypto::decrypt(&encrypted, &secret_key);
-    //     println!("Decrypted message: {:?}", decrypted);
+        let decrypted = PostQuantumCrypto::decrypt(&encrypted, &secret_key);
+        println!("Decrypted message: {:?}", decrypted);
 
-    //     assert_eq!(message, &decrypted[..]);
-    // }
+        assert_eq!(message, &decrypted[..]);
+    }
 
     #[test]
     fn test_shamir_secret_sharing() {

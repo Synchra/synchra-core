@@ -87,69 +87,37 @@ impl PostQuantumCrypto {
         let (ciphertext, shared_secret) = kyber768::encapsulate(&public_key);
         
         let mut encrypted = Vec::new();
-        encrypted.extend_from_slice(&(ciphertext.as_bytes().len() as u32).to_le_bytes());
         encrypted.extend_from_slice(ciphertext.as_bytes());
         
-        if !data.is_empty() {
-            let aes_key = Self::derive_aes_key(shared_secret.as_bytes());
-            let key = Key::<Aes256Gcm>::from_slice(&aes_key);
-            let cipher = Aes256Gcm::new(key);
-            let nonce_bytes: [u8; 12] = rand::thread_rng().gen();
-            let nonce = Nonce::from_slice(&nonce_bytes);
-            
-            encrypted.extend_from_slice(&nonce_bytes);
-            
-            let encrypted_data = cipher.encrypt(nonce, data)
-                .expect("encryption failure!");
-            encrypted.extend(encrypted_data);
-        }
+        let aes_key = Self::derive_aes_key(shared_secret.as_bytes());
+        let key = Key::<Aes256Gcm>::from_slice(&aes_key);
+        let cipher = Aes256Gcm::new(key);
+        let nonce_bytes: [u8; 12] = rand::thread_rng().gen();
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        
+        encrypted.extend_from_slice(&nonce_bytes);
+        
+        let encrypted_data = cipher.encrypt(nonce, data)
+            .expect("encryption failure!");
+        encrypted.extend(encrypted_data);
         
         encrypted
     }
 
     pub fn decrypt(encrypted: &[u8], secret_key: &[u8]) -> Vec<u8> {
-        if encrypted.len() < 4 {
+        let ciphertext_len = kyber768::ciphertext_bytes();
+        
+        if encrypted.len() < ciphertext_len + 12 {
             println!("Encrypted data is too short");
             return Vec::new();
         }
 
-        let (ciphertext_len_bytes, rest) = encrypted.split_at(4);
-        let ciphertext_len = u32::from_le_bytes(ciphertext_len_bytes.try_into().unwrap()) as usize;
-
-        println!("Encrypted data length: {}", encrypted.len());
-        println!("Ciphertext length: {}", ciphertext_len);
-
-        if rest.len() < ciphertext_len {
-            println!("Encrypted data is too short");
-            return Vec::new();
-        }
-
-        let (ciphertext, aes_data) = rest.split_at(ciphertext_len);
+        let (ciphertext, rest) = encrypted.split_at(ciphertext_len);
+        let (nonce, aes_ciphertext) = rest.split_at(12);
 
         let secret_key = kyber768::SecretKey::from_bytes(secret_key).unwrap();
-        let ciphertext = match kyber768::Ciphertext::from_bytes(ciphertext) {
-            Ok(ct) => ct,
-            Err(e) => {
-                println!("Error creating Ciphertext: {:?}", e);
-                return Vec::new();
-            }
-        };
+        let ciphertext = kyber768::Ciphertext::from_bytes(ciphertext).unwrap();
         let shared_secret = kyber768::decapsulate(&ciphertext, &secret_key);
-
-        if aes_data.is_empty() {
-            println!("No AES data");
-            return Vec::new();
-        }
-
-        if aes_data.len() < 12 {
-            println!("AES data is too short");
-            return Vec::new();
-        }
-
-        let (nonce, aes_ciphertext) = aes_data.split_at(12);
-
-        println!("Nonce length: {}", nonce.len());
-        println!("AES ciphertext length: {}", aes_ciphertext.len());
 
         let aes_key = Self::derive_aes_key(shared_secret.as_bytes());
         let key = Key::<Aes256Gcm>::from_slice(&aes_key);
@@ -628,6 +596,12 @@ mod tests {
         println!("Secret key bytes: {}", kyber768::secret_key_bytes());
         println!("Ciphertext bytes: {}", kyber768::ciphertext_bytes());
         println!("Shared secret bytes: {}", kyber768::shared_secret_bytes());
+
+        // Print detailed information about encrypted data structure
+        println!("\nDetailed encrypted data structure:");
+        println!("Ciphertext: {:?}", &encrypted[..kyber768::ciphertext_bytes()]);
+        println!("Nonce: {:?}", &encrypted[kyber768::ciphertext_bytes()..kyber768::ciphertext_bytes()+12]);
+        println!("AES ciphertext: {:?}", &encrypted[kyber768::ciphertext_bytes()+12..]);
     }
 
     #[test]

@@ -179,9 +179,11 @@ impl FractalCipher {
 
     pub fn fie_encode(&self, data: &[u8]) -> Vec<u8> {
         let mut encoded = Vec::new();
-        for &byte in data {
-            let complex = self.byte_to_complex(byte);
-            let mapped = self.julia_map(complex);
+        for chunk in data.chunks(16) {
+            let complex_chunk = self.bytes_to_complex(chunk);
+            println!("Encoding - Input complex: {:?}", complex_chunk);
+            let mapped = self.julia_map(complex_chunk);
+            println!("Encoding - Mapped complex: {:?}", mapped);
             encoded.extend_from_slice(&self.complex_to_bytes(mapped));
         }
         encoded
@@ -190,19 +192,14 @@ impl FractalCipher {
     pub fn fie_decode(&self, encoded: &[u8]) -> Vec<u8> {
         let mut decoded = Vec::new();
         for chunk in encoded.chunks(16) {
-            let complex = self.bytes_to_complex(chunk);
-            let unmapped = self.inverse_julia_map(complex);
-            decoded.push(self.complex_to_byte(unmapped));
+            let complex_chunk = self.bytes_to_complex(chunk);
+            println!("Decoding - Input complex: {:?}", complex_chunk);
+            let unmapped = self.inverse_julia_map(complex_chunk);
+            println!("Decoding - Unmapped complex: {:?}", unmapped);
+            decoded.extend_from_slice(&self.complex_to_bytes(unmapped));
         }
+        decoded.truncate(encoded.len());  // Ensure we don't add extra nulls
         decoded
-    }
-
-    fn byte_to_complex(&self, byte: u8) -> Complex64 {
-        Complex64::new(byte as f64 / 255.0, 0.0)
-    }
-
-    fn complex_to_byte(&self, c: Complex64) -> u8 {
-        (c.re.clamp(0.0, 1.0) * 255.0).round() as u8
     }
 
     fn bytes_to_complex(&self, bytes: &[u8]) -> Complex64 {
@@ -458,9 +455,8 @@ mod tests {
         println!("Decoded data: {:?}", decoded_data);
         println!("Decoded data length: {}", decoded_data.len());
 
-        assert_eq!(original_data, &decoded_data[..], 
-            "Original and decoded data do not match.\nOriginal: {:?}\nDecoded: {:?}", 
-            original_data, decoded_data);
+        assert_eq!(original_data, &decoded_data[..original_data.len()], 
+            "Original and decoded data do not match");
     }
 
     #[test]

@@ -99,7 +99,7 @@ impl PostQuantumCrypto {
         
         let encrypted_data = cipher.encrypt(nonce, data)
             .expect("encryption failure!");
-        encrypted.extend(encrypted_data);
+        encrypted.extend(encrypted_data.clone());
         
         println!("Encryption details:");
         println!("  Ciphertext length: {}", ciphertext.as_bytes().len());

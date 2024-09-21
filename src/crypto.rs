@@ -127,7 +127,13 @@ impl PostQuantumCrypto {
         let (ciphertext, aes_data) = rest.split_at(ciphertext_len);
 
         let secret_key = kyber768::SecretKey::from_bytes(secret_key).unwrap();
-        let ciphertext = kyber768::Ciphertext::from_bytes(ciphertext).unwrap();
+        let ciphertext = match kyber768::Ciphertext::from_bytes(ciphertext) {
+            Ok(ct) => ct,
+            Err(e) => {
+                println!("Error creating Ciphertext: {:?}", e);
+                return Vec::new();
+            }
+        };
         let shared_secret = kyber768::decapsulate(&ciphertext, &secret_key);
 
         if aes_data.is_empty() {
@@ -615,6 +621,13 @@ mod tests {
         println!("Decrypted empty message: {:?}", decrypted_empty);
 
         assert_eq!(empty_message, &decrypted_empty[..], "Decrypted empty message does not match original empty message");
+
+        // Print Kyber parameters
+        println!("\nKyber parameters:");
+        println!("Public key bytes: {}", kyber768::public_key_bytes());
+        println!("Secret key bytes: {}", kyber768::secret_key_bytes());
+        println!("Ciphertext bytes: {}", kyber768::ciphertext_bytes());
+        println!("Shared secret bytes: {}", kyber768::shared_secret_bytes());
     }
 
     #[test]

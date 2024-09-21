@@ -118,7 +118,7 @@ impl PostQuantumCrypto {
                 return Vec::new();
             }
         };
-        encrypted.extend(encrypted_data);
+        encrypted.extend(encrypted_data.clone());
         
         println!("  Nonce length: {}", nonce_bytes.len());
         println!("  AES data length: {}", encrypted_data.len());

@@ -97,11 +97,13 @@ impl PostQuantumCrypto {
         let (ciphertext, shared_secret) = kyber768::encapsulate(&public_key);
         
         let mut encrypted = Vec::new();
-        let ciphertext_len = ciphertext.as_bytes().len() as u32;
+        let ciphertext_bytes = ciphertext.as_bytes();
+        let ciphertext_len = ciphertext_bytes.len() as u32;
         encrypted.extend_from_slice(&ciphertext_len.to_le_bytes());
-        encrypted.extend_from_slice(ciphertext.as_bytes());
+        encrypted.extend_from_slice(ciphertext_bytes);
         
-        println!("  Kyber ciphertext length: {}", ciphertext.as_bytes().len());
+        println!("  Kyber ciphertext length: {}", ciphertext_bytes.len());
+        println!("  Expected Kyber ciphertext length: {}", kyber768::ciphertext_bytes());
         println!("  Shared secret length: {}", shared_secret.as_bytes().len());
         
         let aes_key = Self::derive_aes_key(shared_secret.as_bytes());
@@ -171,6 +173,7 @@ impl PostQuantumCrypto {
             Ok(ct) => ct,
             Err(e) => {
                 println!("Error creating Ciphertext: {:?}", e);
+                println!("Ciphertext length: {}, Expected: {}", ciphertext.len(), kyber768::ciphertext_bytes());
                 return Vec::new();
             }
         };

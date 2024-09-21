@@ -97,6 +97,7 @@ impl PostQuantumCrypto {
         let (ciphertext, shared_secret) = kyber768::encapsulate(&public_key);
         
         let mut encrypted = Vec::new();
+        encrypted.extend_from_slice(&(ciphertext.as_bytes().len() as u32).to_le_bytes());
         encrypted.extend_from_slice(ciphertext.as_bytes());
         
         println!("  Kyber ciphertext length: {}", ciphertext.as_bytes().len());
@@ -117,7 +118,7 @@ impl PostQuantumCrypto {
                 return Vec::new();
             }
         };
-        encrypted.extend(encrypted_data.clone());
+        encrypted.extend(encrypted_data);
         
         println!("  Nonce length: {}", nonce_bytes.len());
         println!("  AES data length: {}", encrypted_data.len());
@@ -130,15 +131,21 @@ impl PostQuantumCrypto {
         println!("Decryption details:");
         println!("  Total encrypted length: {}", encrypted.len());
         
-        let ciphertext_len = kyber768::ciphertext_bytes();
+        if encrypted.len() < 4 {
+            println!("Encrypted data is too short for ciphertext length");
+            return Vec::new();
+        }
+
+        let (ciphertext_len_bytes, rest) = encrypted.split_at(4);
+        let ciphertext_len = u32::from_le_bytes(ciphertext_len_bytes.try_into().unwrap()) as usize;
         println!("  Expected ciphertext length: {}", ciphertext_len);
         
-        if encrypted.len() < ciphertext_len {
+        if rest.len() < ciphertext_len {
             println!("Encrypted data is too short for Kyber ciphertext");
             return Vec::new();
         }
 
-        let (ciphertext, rest) = encrypted.split_at(ciphertext_len);
+        let (ciphertext, rest) = rest.split_at(ciphertext_len);
         println!("  Actual ciphertext length: {}", ciphertext.len());
         println!("  Remaining data length: {}", rest.len());
 
@@ -651,9 +658,11 @@ mod tests {
         // Print detailed information about encrypted data structure
         println!("\nDetailed encrypted data structure:");
         println!("Total encrypted length: {}", encrypted.len());
-        println!("Ciphertext: {:?}", &encrypted[..kyber768::ciphertext_bytes()]);
-        println!("Nonce: {:?}", &encrypted[kyber768::ciphertext_bytes()..kyber768::ciphertext_bytes()+12]);
-        println!("AES ciphertext: {:?}", &encrypted[kyber768::ciphertext_bytes()+12..]);
+        println!("Ciphertext length: {:?}", &encrypted[..4]);
+        let ciphertext_len = u32::from_le_bytes(encrypted[..4].try_into().unwrap()) as usize;
+        println!("Ciphertext: {:?}", &encrypted[4..4+ciphertext_len]);
+        println!("Nonce: {:?}", &encrypted[4+ciphertext_len..4+ciphertext_len+12]);
+        println!("AES ciphertext: {:?}", &encrypted[4+ciphertext_len+12..]);
 
         // Test decryption with incorrect key
         println!("\nTesting decryption with incorrect key:");
@@ -664,9 +673,8 @@ mod tests {
 
         // Print Kyber ciphertext details
         println!("\nKyber ciphertext details:");
-        let kyber_ciphertext = &encrypted[..kyber768::ciphertext_bytes()];
-        println!("Kyber ciphertext length: {}", kyber_ciphertext.len());
-        println!("Kyber ciphertext: {:?}", kyber_ciphertext);
+        println!("Kyber ciphertext length: {}", ciphertext_len);
+        println!("Kyber ciphertext: {:?}", &encrypted[4..4+ciphertext_len]);
     }
 
     #[test]

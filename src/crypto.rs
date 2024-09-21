@@ -179,36 +179,30 @@ impl FractalCipher {
 
     pub fn fie_encode(&self, data: &[u8]) -> Vec<u8> {
         let mut encoded = Vec::new();
-        let mut buffer = [0u8; 16];
-        for chunk in data.chunks(16) {
-            buffer.fill(0);
-            buffer[..chunk.len()].copy_from_slice(chunk);
-            let complex_chunk = self.bytes_to_complex(&buffer);
-            println!("Encoding - Input complex: {:?}", complex_chunk);
-            let mapped = self.julia_map(complex_chunk);
-            println!("Encoding - Mapped complex: {:?}", mapped);
+        for &byte in data {
+            let complex = self.byte_to_complex(byte);
+            let mapped = self.julia_map(complex);
             encoded.extend_from_slice(&self.complex_to_bytes(mapped));
         }
-        encoded.push(data.len() as u8); // Add original length as last byte
         encoded
     }
 
     pub fn fie_decode(&self, encoded: &[u8]) -> Vec<u8> {
-        if encoded.is_empty() {
-            return Vec::new();
-        }
-        let original_len = *encoded.last().unwrap() as usize;
-        let encoded = &encoded[..encoded.len() - 1]; // Remove length byte
         let mut decoded = Vec::new();
         for chunk in encoded.chunks(16) {
-            let complex_chunk = self.bytes_to_complex(chunk);
-            println!("Decoding - Input complex: {:?}", complex_chunk);
-            let unmapped = self.inverse_julia_map(complex_chunk);
-            println!("Decoding - Unmapped complex: {:?}", unmapped);
-            decoded.extend_from_slice(&self.complex_to_bytes(unmapped));
+            let complex = self.bytes_to_complex(chunk);
+            let unmapped = self.inverse_julia_map(complex);
+            decoded.push(self.complex_to_byte(unmapped));
         }
-        decoded.truncate(original_len);
         decoded
+    }
+
+    fn byte_to_complex(&self, byte: u8) -> Complex64 {
+        Complex64::new(byte as f64 / 128.0 - 1.0, 0.0)
+    }
+
+    fn complex_to_byte(&self, c: Complex64) -> u8 {
+        ((c.re + 1.0) * 128.0).round() as u8
     }
 
     fn bytes_to_complex(&self, bytes: &[u8]) -> Complex64 {
@@ -464,8 +458,9 @@ mod tests {
         println!("Decoded data: {:?}", decoded_data);
         println!("Decoded data length: {}", decoded_data.len());
 
-        assert_eq!(original_data, &decoded_data[..original_data.len()], 
-            "Original and decoded data do not match");
+        assert_eq!(original_data, &decoded_data[..], 
+            "Original and decoded data do not match.\nOriginal: {:?}\nDecoded: {:?}", 
+            original_data, decoded_data);
     }
 
     #[test]

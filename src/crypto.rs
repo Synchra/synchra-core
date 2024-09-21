@@ -3,15 +3,18 @@ use pqcrypto_kyber::kyber768;
 use pqcrypto_traits::kem::{PublicKey, SecretKey, Ciphertext, SharedSecret};
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use sha3::{Digest, Sha3_256};
 use shamir_secret_sharing::{num_bigint::{BigInt, Sign}, ShamirSecretSharing as SSS};
+use ssss::{gen_shares, unlock, SsssConfig};
+use core::str;
 use std::f64::consts::PI;
 use byteorder::{ByteOrder, LittleEndian};
 use bincode;
-use secret_sharing_and_dkg::shamir_ss::{deal_secret, deal_random_secret};
-use ark_ff::PrimeField;
-use ark_bls12_381::Fr;
-use ark_std::rand::rngs::OsRng;
+use aes_gcm::{
+    aead::{Aead, KeyInit},
+    Aes256Gcm, Key, Nonce
+};
 pub struct PostQuantumCrypto;
 
 pub struct ChaosStreamCipher {
@@ -59,7 +62,7 @@ impl ChaosStreamCipher {
     }
 }
 
-fn print_message_details(message: &FractalMessage) {
+pub fn print_message_details(message: &FractalMessage) {
     println!("Message ID: {}", message.id);
     println!("Sender length: {}", message.sender.len());
     println!("Recipient length: {}", message.recipient.len());
@@ -73,16 +76,28 @@ impl PostQuantumCrypto {
         (public_key.as_bytes().to_vec(), secret_key.as_bytes().to_vec())
     }
 
+    fn derive_aes_key(shared_secret: &[u8]) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(shared_secret);
+        hasher.finalize().into()
+    }
+
     pub fn encrypt(data: &[u8], public_key: &[u8]) -> Vec<u8> {
         let public_key = kyber768::PublicKey::from_bytes(public_key).unwrap();
         let (ciphertext, shared_secret) = kyber768::encapsulate(&public_key);
         
+        let aes_key = Self::derive_aes_key(shared_secret.as_bytes());
+        let key = Key::<Aes256Gcm>::from_slice(&aes_key);
+        let cipher = Aes256Gcm::new(key);
+        let randy = &rand::thread_rng().gen::<[u8; 12]>();
+        let nonce = Nonce::from_slice(randy);
+        
         let mut encrypted = ciphertext.as_bytes().to_vec();
-        let mut xored_data = data.to_vec();
-        for (a, &b) in xored_data.iter_mut().zip(shared_secret.as_bytes().iter().cycle()) {
-            *a ^= b;
-        }
-        encrypted.extend(xored_data);
+        encrypted.extend_from_slice(nonce.as_slice());
+        
+        let encrypted_data = cipher.encrypt(nonce, data)
+            .expect("encryption failure!");
+        encrypted.extend(encrypted_data);
         
         encrypted
     }
@@ -90,17 +105,27 @@ impl PostQuantumCrypto {
     pub fn decrypt(encrypted: &[u8], secret_key: &[u8]) -> Vec<u8> {
         let secret_key = kyber768::SecretKey::from_bytes(secret_key).unwrap();
         let ciphertext_len = kyber768::ciphertext_bytes();
-        let (ciphertext, data) = encrypted.split_at(ciphertext_len);
+        
+        if encrypted.len() <= ciphertext_len + 12 {
+            panic!("Encrypted data is too short. Length: {}, Expected at least: {}", encrypted.len(), ciphertext_len + 13);
+        }
+        
+        let (ciphertext, rest) = encrypted.split_at(ciphertext_len);
+        let (nonce, aes_ciphertext) = rest.split_at(12);
+        
         let ciphertext = kyber768::Ciphertext::from_bytes(ciphertext).unwrap();
         let shared_secret = kyber768::decapsulate(&ciphertext, &secret_key);
         
-        let mut decrypted = data.to_vec();
-        for (a, &b) in decrypted.iter_mut().zip(shared_secret.as_bytes().iter().cycle()) {
-            *a ^= b;
-        }
-        decrypted
+        let aes_key = Self::derive_aes_key(shared_secret.as_bytes());
+        let key = Key::<Aes256Gcm>::from_slice(&aes_key);
+        let cipher = Aes256Gcm::new(key);
+        let nonce = Nonce::from_slice(nonce);
+        
+        cipher.decrypt(nonce, aes_ciphertext)
+            .expect("decryption failure!")
     }
 }
+
 pub struct FractalCipher {
     iterations: u32,
     scale: f64,
@@ -108,12 +133,9 @@ pub struct FractalCipher {
 
 impl FractalCipher {
     pub fn new(iterations: u32, scale: f64) -> Self {
-        FractalCipher { 
-            iterations,
-            scale,
-        }
+        FractalCipher { iterations, scale }
     }
-
+    
     pub fn encrypt(&self, data: &[u8], key: &[u8]) -> Vec<u8> {
         let mut nonce = [0u8; 16];
         thread_rng().fill(&mut nonce);
@@ -136,7 +158,7 @@ impl FractalCipher {
         let mut keystream = Vec::with_capacity(length);
 
         while keystream.len() < length {
-            z = self.julia_map(z, key_complex);
+            z = self.julia_map(z);
             let bytes = self.complex_to_bytes(z);
             keystream.extend_from_slice(&bytes);
         }
@@ -155,22 +177,14 @@ impl FractalCipher {
         Complex64::new(real.sin() * self.scale, imag.cos() * self.scale)
     }
 
-    fn julia_map(&self, mut z: Complex64, c: Complex64) -> Complex64 {
-        for _ in 0..self.iterations {
-            z = z * z + c;
-            if z.norm() > 2.0 * self.scale {
-                z *= self.scale / z.norm();
-            }
-        }
-        z
-    }
-
     pub fn fie_encode(&self, data: &[u8]) -> Vec<u8> {
         let mut encoded = Vec::new();
         for chunk in data.chunks(16) {
-            let mut complex_chunk = self.bytes_to_complex(chunk);
-            complex_chunk = self.julia_map(complex_chunk, Complex64::new(0.5, 0.5));
-            encoded.extend_from_slice(&self.complex_to_bytes(complex_chunk));
+            let complex_chunk = self.bytes_to_complex(chunk);
+            println!("Encoding - Input complex: {:?}", complex_chunk);
+            let mapped = self.julia_map(complex_chunk);
+            println!("Encoding - Mapped complex: {:?}", mapped);
+            encoded.extend_from_slice(&self.complex_to_bytes(mapped));
         }
         encoded
     }
@@ -178,11 +192,13 @@ impl FractalCipher {
     pub fn fie_decode(&self, encoded: &[u8]) -> Vec<u8> {
         let mut decoded = Vec::new();
         for chunk in encoded.chunks(16) {
-            let mut complex_chunk = self.bytes_to_complex(chunk);
-            complex_chunk = self.inverse_julia_map(complex_chunk, Complex64::new(0.5, 0.5));
-            decoded.extend_from_slice(&self.complex_to_bytes(complex_chunk));
+            let complex_chunk = self.bytes_to_complex(chunk);
+            println!("Decoding - Input complex: {:?}", complex_chunk);
+            let unmapped = self.inverse_julia_map(complex_chunk);
+            println!("Decoding - Unmapped complex: {:?}", unmapped);
+            decoded.extend_from_slice(&self.complex_to_bytes(unmapped));
         }
-        decoded.truncate(encoded.len());
+        decoded.truncate(encoded.len());  // Ensure we don't add extra nulls
         decoded
     }
 
@@ -202,24 +218,34 @@ impl FractalCipher {
         bytes
     }
 
-    fn inverse_julia_map(&self, mut z: Complex64, c: Complex64) -> Complex64 {
-        for _ in 0..self.iterations {
-            z = (z - c).sqrt();
-            if z.norm() > 2.0 * self.scale {
-                z *= -1.0;
-            }
-        }
-        z
+    fn julia_map(&self, z: Complex64) -> Complex64 {
+        let c = Complex64::new(0.5, 0.5);
+        z * z + c
+    }
+
+    fn inverse_julia_map(&self, w: Complex64) -> Complex64 {
+        let c = Complex64::new(0.5, 0.5);
+        let sqrt = (w - c).sqrt();
+        if sqrt.re >= 0.0 { sqrt } else { -sqrt }
     }
 }
 
 
 
-// Nuevas estructuras
-pub struct ShamirSecretSharing {
-    sss: SSS,
+#[derive(Serialize, Deserialize)]
+struct SerializableBigInt(String);
+
+impl From<BigInt> for SerializableBigInt {
+    fn from(n: BigInt) -> Self {
+        SerializableBigInt(n.to_string())
+    }
 }
 
+impl From<SerializableBigInt> for BigInt {
+    fn from(s: SerializableBigInt) -> Self {
+        s.0.parse().unwrap()
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct FractalMessage {
     pub id: String,
@@ -243,69 +269,48 @@ pub struct FractalNode {
     public_key: Vec<u8>,
 }
 
+pub struct ShamirSecretSharing {
+    config: SsssConfig,
+}
+
 impl ShamirSecretSharing {
     pub fn new(threshold: u8, total_shares: u8) -> Self {
-        let prime = BigInt::parse_bytes(b"fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f", 16)
-            .expect("Failed to parse prime");
+        let mut config = SsssConfig::default();
+        config.set_num_shares(total_shares);
+        config.set_threshold(threshold);
         
-        ShamirSecretSharing {
-            sss: SSS {
-                threshold: threshold as usize,
-                share_amount: total_shares as usize,
-                prime,
-            }
-        }
+        ShamirSecretSharing { config }
     }
 
     pub fn split(&self, secret: &[u8]) -> Vec<Vec<u8>> {
-        let secret_bigint = BigInt::from_bytes_be(Sign::Plus, secret);
-        let shares = self.sss.split(secret_bigint);
-        
-        shares.into_iter()
-            .map(|(index, share)| {
-                let mut bytes = Vec::new();
-                bytes.extend_from_slice(&(index as u32).to_be_bytes());
-                bytes.extend_from_slice(&share.to_bytes_be().1);
-                bytes
-            })
+        let secret_str = str::from_utf8(secret).expect("Invalid UTF-8");
+        gen_shares(&self.config, secret_str.as_bytes())
+            .expect("Failed to generate shares")
+            .into_iter()
+            .map(|s| s.into_bytes())
             .collect()
     }
 
     pub fn reconstruct(&self, shares: &[Vec<u8>]) -> Vec<u8> {
-        let shares: Vec<(usize, BigInt)> = shares.iter()
-            .map(|bytes| {
-                let index = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
-                let share = BigInt::from_bytes_be(Sign::Plus, &bytes[4..]);
-                (index, share)
-            })
+        let string_shares: Vec<String> = shares
+            .iter()
+            .map(|s| String::from_utf8(s.to_vec()).expect("Invalid UTF-8"))
             .collect();
-
-        if shares.len() < self.sss.threshold {
-            panic!("Not enough shares to reconstruct the secret");
-        }
-
-        let reconstructed = self.sss.recover(&shares[..self.sss.threshold]);
-        reconstructed.to_bytes_be().1
+        
+        unlock(&string_shares)
+            .expect("Failed to reconstruct secret")
     }
 }
 
 impl FractalMessage {
     pub fn new(sender: Vec<u8>, recipient: Vec<u8>, content: Vec<u8>) -> Self {
-        let id = Self::generate_id(&sender, &recipient, &content);
+        let id = format!("{:x}", md5::compute(&content));
         FractalMessage {
             id,
             sender,
             recipient,
             content,
         }
-    }
-
-    fn generate_id(sender: &[u8], recipient: &[u8], content: &[u8]) -> String {
-        let mut hasher = Sha3_256::new();
-        hasher.update(sender);
-        hasher.update(recipient);
-        hasher.update(content);
-        hex::encode(hasher.finalize())
     }
 }
 
@@ -321,32 +326,15 @@ impl FractalNode {
     }
 }
 
-pub fn fragment_message(message: &FractalMessage, sss: &ShamirSecretSharing) -> Vec<MessageFragment> {
+pub fn fragment_message(message: &FractalMessage, sss: &ShamirSecretSharing) -> Vec<Vec<u8>> {
     let serialized_message = bincode::serialize(&message).expect("Failed to serialize message");
-    let shares = sss.split(&serialized_message);
-    
-    shares.clone()
-        .into_iter()
-        .enumerate()
-        .map(|(i, share)| MessageFragment {
-            fragment_id: format!("{}_frag_{}", message.id, i),
-            fragment_index: i as u8,
-            total_fragments: shares.len() as u8,
-            fragment_data: share,
-            next_hop: format!("node_{}", rand::thread_rng().gen_range(0..10)),
-        })
-        .collect()
+    sss.split(&serialized_message)
 }
 
-pub fn reconstruct_message(fragments: &[MessageFragment], sss: &ShamirSecretSharing) -> Result<FractalMessage, String> {
-    let shares: Vec<Vec<u8>> = fragments.iter().map(|f| f.fragment_data.clone()).collect();
-    
-    let reconstructed_data = sss.reconstruct(&shares);
-    
-    match bincode::deserialize(&reconstructed_data) {
-        Ok(message) => Ok(message),
-        Err(e) => Err(format!("Deserialization error: {}. Reconstructed data length: {}", e, reconstructed_data.len())),
-    }
+pub fn reconstruct_message(fragments: &[Vec<u8>], sss: &ShamirSecretSharing) -> Result<FractalMessage, String> {
+    let reconstructed_data = sss.reconstruct(fragments);
+    bincode::deserialize(&reconstructed_data)
+        .map_err(|e| format!("Deserialization error: {}. Reconstructed data length: {}", e, reconstructed_data.len()))
 }
 
 pub fn route_fragment(fragment: &MessageFragment, nodes: &[FractalNode]) -> Vec<FractalNode> {
@@ -452,22 +440,117 @@ pub fn route_fragment(fragment: &MessageFragment, nodes: &[FractalNode]) -> Vec<
 mod tests {
     use super::*;
 
-    // #[test]
-    // fn test_fractal_cipher_encode_decode() {
-    //     let fractal_cipher = FractalCipher::new(10, 1.5);
-    //     let original_data = b"Hello, Fractal World!";
-    //     let encoded_data = fractal_cipher.fie_encode(original_data);
-    //     let decoded_data = fractal_cipher.fie_decode(&encoded_data);
-    //     assert_eq!(original_data, &decoded_data[..]);
-    // }
+    #[test]
+    fn test_fractal_cipher_encode_decode() {
+        let fractal_cipher = FractalCipher::new(10, 1.5);
+        let original_data = b"Hello, Fractal World!";
+        println!("Original data: {:?}", original_data);
+        println!("Original data length: {}", original_data.len());
+
+        let encoded_data = fractal_cipher.fie_encode(original_data);
+        println!("Encoded data: {:?}", encoded_data);
+        println!("Encoded data length: {}", encoded_data.len());
+
+        let decoded_data = fractal_cipher.fie_decode(&encoded_data);
+        println!("Decoded data: {:?}", decoded_data);
+        println!("Decoded data length: {}", decoded_data.len());
+
+        assert_eq!(original_data, &decoded_data[..original_data.len()], 
+            "Original and decoded data do not match");
+    }
+
+    #[test]
+    fn test_julia_map_inverse() {
+        let fractal_cipher = FractalCipher::new(10, 1.5);
+        let original = Complex64::new(1.0, 1.0);
+        
+        let mapped = fractal_cipher.julia_map(original);
+        println!("Original: {:?}", original);
+        println!("Mapped: {:?}", mapped);
+        
+        let unmapped = fractal_cipher.inverse_julia_map(mapped);
+        println!("Unmapped: {:?}", unmapped);
+        
+        assert!((original - unmapped).norm() < 1e-10, 
+            "Julia map is not perfectly invertible. Original: {:?}, Unmapped: {:?}", original, unmapped);
+    }
+
+    #[test]
+    fn test_encrypt_decrypt() {
+        let fractal_cipher = FractalCipher::new(10, 1.5);
+        let original_data = b"Hello, Fractal World!";
+        let key = b"SecretKey123";
+
+        let encrypted = fractal_cipher.encrypt(original_data, key);
+        let decrypted = fractal_cipher.decrypt(&encrypted, key);
+
+        assert_eq!(original_data, &decrypted[..], 
+            "Encryption/Decryption failed");
+    }
+
+    #[test]
+    fn test_bytes_complex_conversion() {
+        let fractal_cipher = FractalCipher::new(10, 1.5);
+        let original_bytes = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        let complex = fractal_cipher.bytes_to_complex(&original_bytes);
+        let converted_bytes = fractal_cipher.complex_to_bytes(complex);
+        assert_eq!(original_bytes, converted_bytes, "Bytes to complex and back conversion failed");
+    }
+
+    #[test]
+    fn test_generate_keypair() {
+        let (public_key, secret_key) = PostQuantumCrypto::generate_keypair();
+        assert_eq!(public_key.len(), kyber768::public_key_bytes());
+        assert_eq!(secret_key.len(), kyber768::secret_key_bytes());
+    }
+
+    #[test]
+    fn test_derive_aes_key() {
+        let dummy_secret = vec![0u8; 32];
+        let aes_key = PostQuantumCrypto::derive_aes_key(&dummy_secret);
+        assert_eq!(aes_key.len(), 32);
+    }
+
+    #[test]
+    fn test_kyber_encapsulate_decapsulate() {
+        let (public_key, secret_key) = kyber768::keypair();
+        let (shared_secret1, ciphertext) = kyber768::encapsulate(&public_key);
+        let shared_secret2 = kyber768::decapsulate(&ciphertext, &secret_key);
+        assert_eq!(shared_secret1.as_bytes(), shared_secret2.as_bytes());
+    }
+
+    #[test]
+    fn test_aes_encrypt_decrypt() {
+        let key = Key::<Aes256Gcm>::from_slice(&[0u8; 32]);
+        let cipher = Aes256Gcm::new(key);
+        let nonce = Nonce::from_slice(&[0u8; 12]);
+        let plaintext = b"test message";
+        
+        let ciphertext = cipher.encrypt(nonce, plaintext.as_ref())
+            .expect("encryption failure!");
+        let decrypted = cipher.decrypt(nonce, ciphertext.as_ref())
+            .expect("decryption failure!");
+        
+        assert_eq!(plaintext, &decrypted[..]);
+    }
 
     // #[test]
-    // fn test_post_quantum_crypto_encrypt_decrypt() {
+    // fn test_detailed_encrypt_decrypt() {
     //     let (public_key, secret_key) = PostQuantumCrypto::generate_keypair();
-    //     let original_data = b"Secret message";
-    //     let encrypted_data = PostQuantumCrypto::encrypt(original_data, &public_key);
-    //     let decrypted_data = PostQuantumCrypto::decrypt(&encrypted_data, &secret_key);
-    //     assert_eq!(original_data, &decrypted_data[..]);
+    //     println!("Public key length: {}", public_key.len());
+    //     println!("Secret key length: {}", secret_key.len());
+
+    //     let message = b"test message";
+    //     println!("Original message: {:?}", message);
+
+    //     let encrypted = PostQuantumCrypto::encrypt(message, &public_key);
+    //     println!("Encrypted data length: {}", encrypted.len());
+    //     println!("Encrypted data: {:?}", &encrypted[..20]); // Mostrar solo los primeros 20 bytes
+
+    //     let decrypted = PostQuantumCrypto::decrypt(&encrypted, &secret_key);
+    //     println!("Decrypted message: {:?}", decrypted);
+
+    //     assert_eq!(message, &decrypted[..]);
     // }
 
     #[test]
@@ -481,48 +564,85 @@ mod tests {
     }
 
     #[test]
-    fn test_fragment_and_reconstruct_message() {
-        let sss = ShamirSecretSharing::new(3, 5);
-        let original_message = FractalMessage::new(
-            vec![1; 32],
-            vec![2; 32],
-            b"Test content".to_vec(),
-        );
-        let fragments = fragment_message(&original_message, &sss);
-        assert_eq!(fragments.len(), 5);
-        
-        match reconstruct_message(&fragments[..5], &sss) {
-            Ok(reconstructed) => {
-                println!("Original message:");
-                print_message_details(&original_message);
+    fn test_various_secret_sizes() {
+        let threshold = 3;
+        let total_shares = 5;
+        let sss = ShamirSecretSharing::new(threshold, total_shares);
 
-                let reconstructed = reconstruct_message(&fragments[..3], &sss).expect("Failed to reconstruct message");
-                println!("Reconstructed message:");
-                print_message_details(&reconstructed);
-                assert_eq!(original_message, reconstructed);
-            },
-            Err(e) => {
-                panic!("Failed to reconstruct message: {}", e);
-            }
+        let sizes_to_test = [16, 24, 32, 48, 64, 128];
+
+        for &size in &sizes_to_test {
+            println!("Testing with secret size: {} bytes", size);
+
+            let mut rng = rand::thread_rng();
+
+            let secret: Vec<u8> = (0..size).map(|_| rng.gen_range(32..127) as u8).collect();
+            println!("Original secret: {:?}", &secret[..32.min(secret.len())]);
+
+            let shares = sss.split(&secret);
+            println!("  Generated {} shares", shares.len());
+            println!("  First share length: {} bytes", shares[0].len());
+            println!("  First share content: {:?}", &shares[0][..20.min(shares[0].len())]);
+
+            let reconstructed_secret = sss.reconstruct(&shares[..threshold as usize]);
+            println!("  Reconstructed secret length: {} bytes", reconstructed_secret.len());
+            println!("  Reconstructed secret: {:?}", &reconstructed_secret[..32.min(reconstructed_secret.len())]);
+
+            assert_eq!(secret, reconstructed_secret, "Reconstructed secret does not match original for size {}", size);
+            println!("  Success: Secret successfully reconstructed!");
+
+            // Test with fewer shares
+            let mut reduced_shares = shares.clone();
+            reduced_shares.truncate(threshold as usize);
+            let reconstructed_secret = sss.reconstruct(&reduced_shares);
+            assert_eq!(secret, reconstructed_secret, "Reconstructed secret does not match original with minimum shares for size {}", size);
+            println!("  Success: Secret successfully reconstructed with minimum shares!");
         }
     }
 
-    // #[test]
-    // fn test_route_fragment() {
-    //     let nodes: Vec<FractalNode> = (0..10)
-    //         .map(|i| FractalNode::new(format!("node_{}", i), vec![i; 32]))
-    //         .collect();
-    //     let fragment = MessageFragment {
-    //         fragment_id: "test_frag".to_string(),
-    //         fragment_index: 0,
-    //         total_fragments: 1,
-    //         fragment_data: vec![0; 32],
-    //         next_hop: "node_5".to_string(),
-    //     };
-    //     let route = route_fragment(&fragment, &nodes);
-    //     assert!(!route.is_empty());
-    //     assert_eq!(route[0].id, "node_5");
-    // }
+    #[test]
+    fn test_fragment_and_reconstruct_message() {
+        let sss = ShamirSecretSharing::new(5, 12);
+        let original_message = FractalMessage::new(
+            vec![1; 32],
+            vec![2; 32],
+            b"Hola hijo de puta macho me caog en la puta virgen de oros como lea esto me corro".to_vec(),
+        );
+        let fragments = fragment_message(&original_message, &sss);
+        assert_eq!(fragments.len(), 12);
+        
+        println!("Original message:");
+        print_message_details(&original_message);
+
+        let reconstructed = reconstruct_message(&fragments[..5], &sss).expect("Failed to reconstruct message");
+        println!("Reconstructed message:");
+        print_message_details(&reconstructed);
+        
+        assert_eq!(original_message, reconstructed);
+        println!("Success: Message successfully fragmented and reconstructed!");
+        
+        // Test with all fragments
+        let reconstructed_all = reconstruct_message(&fragments, &sss).expect("Failed to reconstruct message with all fragments");
+        assert_eq!(original_message, reconstructed_all);
+        println!("Success: Message successfully reconstructed with all fragments!");
+    }
+
+    #[test]
+    fn test_route_fragment() {
+        let nodes: Vec<FractalNode> = (0..10)
+            .map(|i| FractalNode::new(format!("node_{}", i), vec![i; 32]))
+            .collect();
+        let fragment = MessageFragment {
+            fragment_id: "test_frag".to_string(),
+            fragment_index: 0,
+            total_fragments: 1,
+            fragment_data: vec![0; 32],
+            next_hop: "node_5".to_string(),
+        };
+        let route = route_fragment(&fragment, &nodes);
+        assert!(!route.is_empty());
+        assert_eq!(route[0].id, "node_5");
+    }
 
     // #[test]
     // fn test_end_to_end_message_flow() {

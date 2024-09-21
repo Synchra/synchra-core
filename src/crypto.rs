@@ -71,112 +71,30 @@ pub fn print_message_details(message: &FractalMessage) {
     println!("Content (as UTF-8 if possible): {}", String::from_utf8_lossy(&message.content));
 }
 
+
 impl PostQuantumCrypto {
     pub fn generate_keypair() -> (Vec<u8>, Vec<u8>) {
         let mut rng = thread_rng();
+        let kem = MlKem768;
         let (dk, ek) = MlKem768::generate(&mut rng);
-        (ek.as_bytes().to_vec(), dk.as_bytes().to_vec())
+        (ek.as_bytes().to_vec(), dk.to_bytes().to_vec())
     }
 
-    fn derive_aes_key(shared_secret: &[u8]) -> [u8; 32] {
-        use sha2::Digest;
-        let mut hasher = Sha256::new();
-        hasher.update(shared_secret);
-        hasher.finalize().into()
-    }
-
-    pub fn encrypt(data: &[u8], public_key: &[u8]) -> Vec<u8> {
-        println!("Encryption details:");
-        println!("  Input data length: {}", data.len());
-        
-        let ek = <MlKem768 as KemCore>::EncapsulationKey::from_bytes(public_key.try_into().unwrap()).unwrap();
-        
+    pub fn encrypt(public_key: &[u8]) -> (Vec<u8>, Vec<u8>) {
         let mut rng = thread_rng();
-        let (ciphertext, shared_secret) = MlKem768::encapsulate(&ek, &mut rng);
-        
-        let mut encrypted = Vec::new();
-        let ciphertext_bytes = ciphertext.as_bytes();
-        let original_len = ciphertext_bytes.len() as u32;
-        
-        encrypted.extend_from_slice(&original_len.to_le_bytes());
-        encrypted.extend_from_slice(ciphertext_bytes);
-        
-        println!("  ML-KEM ciphertext length: {}", ciphertext_bytes.len());
-        println!("  Shared secret length: {}", shared_secret.len());
-        
-        let aes_key = Self::derive_aes_key(&shared_secret);
-        println!("  AES key: {:?}", aes_key);
-        let key = Key::<Aes256Gcm>::from_slice(&aes_key);
-        let cipher = Aes256Gcm::new(key);
-        let nonce_bytes: [u8; 12] = rand::thread_rng().gen();
-        let nonce = Nonce::from_slice(&nonce_bytes);
-        
-        encrypted.extend_from_slice(&nonce_bytes);
-        
-        let encrypted_data = match cipher.encrypt(nonce, data) {
-            Ok(ed) => ed,
-            Err(e) => {
-                println!("AES encryption failed: {:?}", e);
-                return Vec::new();
-            }
-        };
-        encrypted.extend(encrypted_data.clone());
-        
-        println!("  Nonce: {:?}", nonce_bytes);
-        println!("  Nonce length: {}", nonce_bytes.len());
-        println!("  AES data: {:?}", encrypted_data);
-        println!("  AES data length: {}", encrypted_data.len());
-        println!("  Total encrypted length: {}", encrypted.len());
-        
-        encrypted
+        let ek = MlKem768::EncapsulationKey::from_bytes(public_key.try_into().unwrap());
+        let (ct, k_send) = ek.encapsulate(&mut rng).unwrap();
+        (ct.to_bytes().to_vec(), k_send.to_vec())
     }
 
-    pub fn decrypt(encrypted: &[u8], secret_key: &[u8]) -> Vec<u8> {
-        println!("Decryption details:");
-        println!("  Total encrypted length: {}", encrypted.len());
-        
-        if encrypted.len() < 4 + <MlKem768 as KemCore>::CIPHERTEXT_LEN + 12 {
-            println!("Encrypted data is too short");
-            return Vec::new();
-        }
-    
-        let original_len = u32::from_le_bytes([encrypted[0], encrypted[1], encrypted[2], encrypted[3]]) as usize;
-        println!("  Original ciphertext length: {}", original_len);
-        
-        let (_, rest) = encrypted.split_at(4);
-        let (ciphertext_bytes, rest) = rest.split_at(<MlKem768 as KemCore>::CIPHERTEXT_LEN);
-        let (nonce, aes_ciphertext) = rest.split_at(12);
-        
-        println!("  Ciphertext length: {}", ciphertext_bytes.len());
-        println!("  Nonce: {:?}", nonce);
-        println!("  Nonce length: {}", nonce.len());
-        println!("  AES ciphertext: {:?}", aes_ciphertext);
-        println!("  AES ciphertext length: {}", aes_ciphertext.len());
-    
-        let dk = <MlKem768 as KemCore>::DecapsulationKey::from_bytes(secret_key.try_into().unwrap()).unwrap();
-        let ciphertext = <MlKem768 as KemCore>::Ciphertext::from_bytes(ciphertext_bytes.try_into().unwrap()).unwrap();
-    
-        let shared_secret = MlKem768::decapsulate(&dk, &ciphertext);
-        println!("  Shared secret length: {}", shared_secret.len());
-    
-        let aes_key = Self::derive_aes_key(&shared_secret);
-        println!("  AES key: {:?}", aes_key);
-        let key = Key::<Aes256Gcm>::from_slice(&aes_key);
-        let cipher = Aes256Gcm::new(key);
-        let nonce = Nonce::from_slice(nonce);
-    
-        match cipher.decrypt(nonce, aes_ciphertext) {
-            Ok(decrypted) => {
-                println!("Decryption successful. Decrypted length: {}", decrypted.len());
-                decrypted
-            },
-            Err(e) => {
-                println!("Decryption failed: {:?}", e);
-                Vec::new()
-            }
-        }
+    pub fn decrypt(ciphertext: &[u8], secret_key: &[u8]) -> Vec<u8> {
+        let dk = MlKem768::DecapsulationKey::from_bytes(secret_key.try_into().unwrap());
+        let ct = MlKem768::Ciphertext::from_bytes(ciphertext.try_into().unwrap());
+        let k_recv = dk.decapsulate(&ct).unwrap();
+        k_recv.to_vec()
     }
 }
+
 
 pub struct FractalCipher {
     iterations: u32,

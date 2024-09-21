@@ -109,8 +109,12 @@ impl PostQuantumCrypto {
         let secret_key = kyber768::SecretKey::from_bytes(secret_key).unwrap();
         let ciphertext_len = kyber768::ciphertext_bytes();
         
+        println!("Encrypted data length: {}", encrypted.len());
+        println!("Ciphertext length: {}", ciphertext_len);
+        
         if encrypted.len() < ciphertext_len {
-            return Vec::new(); // Return empty vector if data is too short
+            println!("Encrypted data is too short");
+            return Vec::new();
         }
         
         let (ciphertext, rest) = encrypted.split_at(ciphertext_len);
@@ -118,23 +122,38 @@ impl PostQuantumCrypto {
         let ciphertext = kyber768::Ciphertext::from_bytes(ciphertext).unwrap();
         let shared_secret = kyber768::decapsulate(&ciphertext, &secret_key);
         
+        println!("Rest length: {}", rest.len());
+        
         if rest.is_empty() {
-            return Vec::new(); // Return empty vector if there's no AES data
+            println!("No AES data");
+            return Vec::new();
         }
         
         if rest.len() < 12 {
-            return Vec::new(); // Return empty vector if AES data is too short
+            println!("AES data is too short");
+            return Vec::new();
         }
         
         let (nonce, aes_ciphertext) = rest.split_at(12);
+        
+        println!("Nonce length: {}", nonce.len());
+        println!("AES ciphertext length: {}", aes_ciphertext.len());
         
         let aes_key = Self::derive_aes_key(shared_secret.as_bytes());
         let key = Key::<Aes256Gcm>::from_slice(&aes_key);
         let cipher = Aes256Gcm::new(key);
         let nonce = Nonce::from_slice(nonce);
         
-        cipher.decrypt(nonce, aes_ciphertext)
-            .unwrap_or_else(|_| Vec::new()) // Return empty vector on decryption failure
+        match cipher.decrypt(nonce, aes_ciphertext) {
+            Ok(decrypted) => {
+                println!("Decryption successful. Decrypted length: {}", decrypted.len());
+                decrypted
+            },
+            Err(e) => {
+                println!("Decryption failed: {:?}", e);
+                Vec::new()
+            }
+        }
     }
 }
 
@@ -571,24 +590,25 @@ mod tests {
 
         let encrypted = PostQuantumCrypto::encrypt(message, &public_key);
         println!("Encrypted data length: {}", encrypted.len());
-        println!("Encrypted data: {:?}", &encrypted[..20]); // Mostrar solo los primeros 20 bytes
+        println!("Encrypted data: {:?}", &encrypted);
 
         let decrypted = PostQuantumCrypto::decrypt(&encrypted, &secret_key);
         println!("Decrypted message: {:?}", decrypted);
 
-        assert_eq!(message, &decrypted[..]);
+        assert_eq!(message, &decrypted[..], "Decrypted message does not match original message");
 
         // Test with empty message
         let empty_message = b"";
-        println!("Empty message: {:?}", empty_message);
+        println!("\nEmpty message: {:?}", empty_message);
 
         let encrypted_empty = PostQuantumCrypto::encrypt(empty_message, &public_key);
         println!("Encrypted empty data length: {}", encrypted_empty.len());
+        println!("Encrypted empty data: {:?}", &encrypted_empty);
 
         let decrypted_empty = PostQuantumCrypto::decrypt(&encrypted_empty, &secret_key);
         println!("Decrypted empty message: {:?}", decrypted_empty);
 
-        assert_eq!(empty_message, &decrypted_empty[..]);
+        assert_eq!(empty_message, &decrypted_empty[..], "Decrypted empty message does not match original empty message");
     }
 
     #[test]

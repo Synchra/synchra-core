@@ -92,9 +92,10 @@ impl PostQuantumCrypto {
             let aes_key = Self::derive_aes_key(shared_secret.as_bytes());
             let key = Key::<Aes256Gcm>::from_slice(&aes_key);
             let cipher = Aes256Gcm::new(key);
-            let nonce = Nonce::from_slice(&rand::thread_rng().gen::<[u8; 12]>());
+            let nonce_bytes: [u8; 12] = rand::thread_rng().gen();
+            let nonce = Nonce::from_slice(&nonce_bytes);
             
-            encrypted.extend_from_slice(nonce.as_slice());
+            encrypted.extend_from_slice(&nonce_bytes);
             
             let encrypted_data = cipher.encrypt(nonce, data)
                 .expect("encryption failure!");

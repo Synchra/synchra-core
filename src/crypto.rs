@@ -102,11 +102,21 @@ impl PostQuantumCrypto {
         encrypted.extend_from_slice(&(encrypted_data.len() as u32).to_le_bytes());
         encrypted.extend(encrypted_data);
         
+        println!("Encryption details:");
+        println!("  Ciphertext length: {}", ciphertext.as_bytes().len());
+        println!("  Nonce length: {}", nonce_bytes.len());
+        println!("  AES data length: {}", encrypted_data.len());
+        println!("  Total encrypted length: {}", encrypted.len());
+        
         encrypted
     }
 
     pub fn decrypt(encrypted: &[u8], secret_key: &[u8]) -> Vec<u8> {
+        println!("Decryption details:");
+        println!("  Total encrypted length: {}", encrypted.len());
+        
         let ciphertext_len = kyber768::ciphertext_bytes();
+        println!("  Expected ciphertext length: {}", ciphertext_len);
         
         if encrypted.len() < ciphertext_len + 12 + 4 {
             println!("Encrypted data is too short");
@@ -118,13 +128,23 @@ impl PostQuantumCrypto {
         let (aes_len_bytes, aes_ciphertext) = rest.split_at(4);
         let aes_len = u32::from_le_bytes(aes_len_bytes.try_into().unwrap()) as usize;
 
+        println!("  Nonce length: {}", nonce.len());
+        println!("  AES length from data: {}", aes_len);
+        println!("  Actual AES ciphertext length: {}", aes_ciphertext.len());
+
         if aes_ciphertext.len() != aes_len {
             println!("AES ciphertext length mismatch");
             return Vec::new();
         }
 
         let secret_key = kyber768::SecretKey::from_bytes(secret_key).unwrap();
-        let ciphertext = kyber768::Ciphertext::from_bytes(ciphertext).unwrap();
+        let ciphertext = match kyber768::Ciphertext::from_bytes(ciphertext) {
+            Ok(ct) => ct,
+            Err(e) => {
+                println!("Error creating Ciphertext: {:?}", e);
+                return Vec::new();
+            }
+        };
         let shared_secret = kyber768::decapsulate(&ciphertext, &secret_key);
 
         let aes_key = Self::derive_aes_key(shared_secret.as_bytes());
@@ -607,10 +627,18 @@ mod tests {
 
         // Print detailed information about encrypted data structure
         println!("\nDetailed encrypted data structure:");
+        println!("Total encrypted length: {}", encrypted.len());
         println!("Ciphertext: {:?}", &encrypted[..kyber768::ciphertext_bytes()]);
         println!("Nonce: {:?}", &encrypted[kyber768::ciphertext_bytes()..kyber768::ciphertext_bytes()+12]);
-        println!("AES data length: {:?}", &encrypted[kyber768::ciphertext_bytes()+12..kyber768::ciphertext_bytes()+16]);
+        println!("AES data length bytes: {:?}", &encrypted[kyber768::ciphertext_bytes()+12..kyber768::ciphertext_bytes()+16]);
         println!("AES ciphertext: {:?}", &encrypted[kyber768::ciphertext_bytes()+16..]);
+
+        // Test decryption with incorrect key
+        println!("\nTesting decryption with incorrect key:");
+        let (_, incorrect_key) = PostQuantumCrypto::generate_keypair();
+        let decrypted_incorrect = PostQuantumCrypto::decrypt(&encrypted, &incorrect_key);
+        println!("Decrypted message with incorrect key: {:?}", decrypted_incorrect);
+        assert!(decrypted_incorrect.is_empty(), "Decryption with incorrect key should fail");
     }
 
     #[test]

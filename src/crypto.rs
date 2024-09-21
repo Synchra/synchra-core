@@ -141,20 +141,24 @@ impl FractalCipher {
         thread_rng().fill(&mut nonce);
         
         let mut encrypted = nonce.to_vec();
-        let keystream = self.generate_keystream(data.len(), key, &nonce);
+        let key_complex = self.key_to_complex(key, &nonce);
+        let keystream = self.generate_keystream(data.len(), key_complex);
         encrypted.extend(data.iter().zip(keystream.iter()).map(|(&b, &k)| b ^ k));
         encrypted
     }
 
     pub fn decrypt(&self, encrypted: &[u8], key: &[u8]) -> Vec<u8> {
+        if encrypted.len() < 16 {
+            panic!("Encrypted data is too short");
+        }
         let (nonce, data) = encrypted.split_at(16);
-        let keystream = self.generate_keystream(data.len(), key, nonce);
+        let key_complex = self.key_to_complex(key, nonce);
+        let keystream = self.generate_keystream(data.len(), key_complex);
         data.iter().zip(keystream.iter()).map(|(&b, &k)| b ^ k).collect()
     }
 
-    fn generate_keystream(&self, length: usize, key: &[u8], nonce: &[u8]) -> Vec<u8> {
-        let key_complex = self.key_to_complex(key, nonce);
-        let mut z = Complex64::new(0.0, 0.0);
+    fn generate_keystream(&self, length: usize, key_complex: Complex64) -> Vec<u8> {
+        let mut z = key_complex;
         let mut keystream = Vec::with_capacity(length);
 
         while keystream.len() < length {

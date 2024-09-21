@@ -99,13 +99,14 @@ impl PostQuantumCrypto {
         
         let encrypted_data = cipher.encrypt(nonce, data)
             .expect("encryption failure!");
-        encrypted.extend_from_slice(&(encrypted_data.len() as u32).to_le_bytes());
+        let aes_data_len = encrypted_data.len();
+        encrypted.extend_from_slice(&(aes_data_len as u32).to_le_bytes());
         encrypted.extend(encrypted_data);
         
         println!("Encryption details:");
         println!("  Ciphertext length: {}", ciphertext.as_bytes().len());
         println!("  Nonce length: {}", nonce_bytes.len());
-        println!("  AES data length: {}", encrypted_data.len());
+        println!("  AES data length: {}", aes_data_len);
         println!("  Total encrypted length: {}", encrypted.len());
         
         encrypted

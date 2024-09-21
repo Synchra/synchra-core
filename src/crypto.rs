@@ -83,11 +83,24 @@ impl PostQuantumCrypto {
     }
 
     pub fn encrypt(data: &[u8], public_key: &[u8]) -> Vec<u8> {
-        let public_key = kyber768::PublicKey::from_bytes(public_key).unwrap();
+        println!("Encryption details:");
+        println!("  Input data length: {}", data.len());
+        
+        let public_key = match kyber768::PublicKey::from_bytes(public_key) {
+            Ok(pk) => pk,
+            Err(e) => {
+                println!("Error creating PublicKey: {:?}", e);
+                return Vec::new();
+            }
+        };
+        
         let (ciphertext, shared_secret) = kyber768::encapsulate(&public_key);
         
         let mut encrypted = Vec::new();
         encrypted.extend_from_slice(ciphertext.as_bytes());
+        
+        println!("  Kyber ciphertext length: {}", ciphertext.as_bytes().len());
+        println!("  Shared secret length: {}", shared_secret.as_bytes().len());
         
         let aes_key = Self::derive_aes_key(shared_secret.as_bytes());
         let key = Key::<Aes256Gcm>::from_slice(&aes_key);
@@ -97,12 +110,15 @@ impl PostQuantumCrypto {
         
         encrypted.extend_from_slice(&nonce_bytes);
         
-        let encrypted_data = cipher.encrypt(nonce, data)
-            .expect("encryption failure!");
+        let encrypted_data = match cipher.encrypt(nonce, data) {
+            Ok(ed) => ed,
+            Err(e) => {
+                println!("AES encryption failed: {:?}", e);
+                return Vec::new();
+            }
+        };
         encrypted.extend(encrypted_data.clone());
         
-        println!("Encryption details:");
-        println!("  Ciphertext length: {}", ciphertext.as_bytes().len());
         println!("  Nonce length: {}", nonce_bytes.len());
         println!("  AES data length: {}", encrypted_data.len());
         println!("  Total encrypted length: {}", encrypted.len());
@@ -117,19 +133,32 @@ impl PostQuantumCrypto {
         let ciphertext_len = kyber768::ciphertext_bytes();
         println!("  Expected ciphertext length: {}", ciphertext_len);
         
-        if encrypted.len() <= ciphertext_len + 12 {
-            println!("Encrypted data is too short");
+        if encrypted.len() < ciphertext_len {
+            println!("Encrypted data is too short for Kyber ciphertext");
             return Vec::new();
         }
 
         let (ciphertext, rest) = encrypted.split_at(ciphertext_len);
-        let (nonce, aes_ciphertext) = rest.split_at(12);
-
         println!("  Actual ciphertext length: {}", ciphertext.len());
+        println!("  Remaining data length: {}", rest.len());
+
+        if rest.len() < 12 {
+            println!("Remaining data is too short for nonce");
+            return Vec::new();
+        }
+
+        let (nonce, aes_ciphertext) = rest.split_at(12);
         println!("  Nonce length: {}", nonce.len());
         println!("  AES ciphertext length: {}", aes_ciphertext.len());
 
-        let secret_key = kyber768::SecretKey::from_bytes(secret_key).unwrap();
+        let secret_key = match kyber768::SecretKey::from_bytes(secret_key) {
+            Ok(sk) => sk,
+            Err(e) => {
+                println!("Error creating SecretKey: {:?}", e);
+                return Vec::new();
+            }
+        };
+
         let ciphertext = match kyber768::Ciphertext::from_bytes(ciphertext) {
             Ok(ct) => ct,
             Err(e) => {
@@ -137,7 +166,9 @@ impl PostQuantumCrypto {
                 return Vec::new();
             }
         };
+
         let shared_secret = kyber768::decapsulate(&ciphertext, &secret_key);
+        println!("  Shared secret length: {}", shared_secret.as_bytes().len());
 
         let aes_key = Self::derive_aes_key(shared_secret.as_bytes());
         let key = Key::<Aes256Gcm>::from_slice(&aes_key);

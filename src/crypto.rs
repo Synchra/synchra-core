@@ -86,7 +86,9 @@ impl PostQuantumCrypto {
         let public_key = kyber768::PublicKey::from_bytes(public_key).unwrap();
         let (ciphertext, shared_secret) = kyber768::encapsulate(&public_key);
         
-        let mut encrypted = ciphertext.as_bytes().to_vec();
+        let mut encrypted = Vec::new();
+        encrypted.extend_from_slice(&(ciphertext.as_bytes().len() as u32).to_le_bytes());
+        encrypted.extend_from_slice(ciphertext.as_bytes());
         
         if !data.is_empty() {
             let aes_key = Self::derive_aes_key(shared_secret.as_bytes());
@@ -106,44 +108,48 @@ impl PostQuantumCrypto {
     }
 
     pub fn decrypt(encrypted: &[u8], secret_key: &[u8]) -> Vec<u8> {
-        let secret_key = kyber768::SecretKey::from_bytes(secret_key).unwrap();
-        let ciphertext_len = kyber768::ciphertext_bytes();
-        
-        println!("Encrypted data length: {}", encrypted.len());
-        println!("Ciphertext length: {}", ciphertext_len);
-        
-        if encrypted.len() < ciphertext_len {
+        if encrypted.len() < 4 {
             println!("Encrypted data is too short");
             return Vec::new();
         }
-        
-        let (ciphertext, rest) = encrypted.split_at(ciphertext_len);
-        
+
+        let (ciphertext_len_bytes, rest) = encrypted.split_at(4);
+        let ciphertext_len = u32::from_le_bytes(ciphertext_len_bytes.try_into().unwrap()) as usize;
+
+        println!("Encrypted data length: {}", encrypted.len());
+        println!("Ciphertext length: {}", ciphertext_len);
+
+        if rest.len() < ciphertext_len {
+            println!("Encrypted data is too short");
+            return Vec::new();
+        }
+
+        let (ciphertext, aes_data) = rest.split_at(ciphertext_len);
+
+        let secret_key = kyber768::SecretKey::from_bytes(secret_key).unwrap();
         let ciphertext = kyber768::Ciphertext::from_bytes(ciphertext).unwrap();
         let shared_secret = kyber768::decapsulate(&ciphertext, &secret_key);
-        
-        println!("Rest length: {}", rest.len());
-        
-        if rest.is_empty() {
+
+        if aes_data.is_empty() {
             println!("No AES data");
             return Vec::new();
         }
-        
-        if rest.len() < 12 {
+
+        if aes_data.len() < 12 {
             println!("AES data is too short");
             return Vec::new();
         }
-        
-        let (nonce, aes_ciphertext) = rest.split_at(12);
-        
+
+        let (nonce, aes_ciphertext) = aes_data.split_at(12);
+
         println!("Nonce length: {}", nonce.len());
         println!("AES ciphertext length: {}", aes_ciphertext.len());
-        
+
         let aes_key = Self::derive_aes_key(shared_secret.as_bytes());
         let key = Key::<Aes256Gcm>::from_slice(&aes_key);
         let cipher = Aes256Gcm::new(key);
         let nonce = Nonce::from_slice(nonce);
-        
+
         match cipher.decrypt(nonce, aes_ciphertext) {
             Ok(decrypted) => {
                 println!("Decryption successful. Decrypted length: {}", decrypted.len());

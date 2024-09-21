@@ -98,8 +98,6 @@ impl PostQuantumCrypto {
         
         let mut encrypted = Vec::new();
         let ciphertext_bytes = ciphertext.as_bytes();
-        let ciphertext_len = ciphertext_bytes.len() as u32;
-        encrypted.extend_from_slice(&ciphertext_len.to_le_bytes());
         encrypted.extend_from_slice(ciphertext_bytes);
         
         println!("  Kyber ciphertext length: {}", ciphertext_bytes.len());
@@ -134,21 +132,15 @@ impl PostQuantumCrypto {
         println!("Decryption details:");
         println!("  Total encrypted length: {}", encrypted.len());
         
-        if encrypted.len() < 4 {
-            println!("Encrypted data is too short for ciphertext length");
-            return Vec::new();
-        }
-
-        let (ciphertext_len_bytes, rest) = encrypted.split_at(4);
-        let ciphertext_len = u32::from_le_bytes(ciphertext_len_bytes.try_into().unwrap()) as usize;
+        let ciphertext_len = kyber768::ciphertext_bytes();
         println!("  Expected ciphertext length: {}", ciphertext_len);
         
-        if rest.len() < ciphertext_len {
+        if encrypted.len() < ciphertext_len {
             println!("Encrypted data is too short for Kyber ciphertext");
             return Vec::new();
         }
 
-        let (ciphertext, rest) = rest.split_at(ciphertext_len);
+        let (ciphertext, rest) = encrypted.split_at(ciphertext_len);
         println!("  Actual ciphertext length: {}", ciphertext.len());
         println!("  Remaining data length: {}", rest.len());
 

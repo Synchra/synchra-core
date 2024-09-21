@@ -99,6 +99,7 @@ impl PostQuantumCrypto {
         
         let encrypted_data = cipher.encrypt(nonce, data)
             .expect("encryption failure!");
+        encrypted.extend_from_slice(&(encrypted_data.len() as u32).to_le_bytes());
         encrypted.extend(encrypted_data);
         
         encrypted
@@ -107,13 +108,20 @@ impl PostQuantumCrypto {
     pub fn decrypt(encrypted: &[u8], secret_key: &[u8]) -> Vec<u8> {
         let ciphertext_len = kyber768::ciphertext_bytes();
         
-        if encrypted.len() < ciphertext_len + 12 {
+        if encrypted.len() < ciphertext_len + 12 + 4 {
             println!("Encrypted data is too short");
             return Vec::new();
         }
 
         let (ciphertext, rest) = encrypted.split_at(ciphertext_len);
-        let (nonce, aes_ciphertext) = rest.split_at(12);
+        let (nonce, rest) = rest.split_at(12);
+        let (aes_len_bytes, aes_ciphertext) = rest.split_at(4);
+        let aes_len = u32::from_le_bytes(aes_len_bytes.try_into().unwrap()) as usize;
+
+        if aes_ciphertext.len() != aes_len {
+            println!("AES ciphertext length mismatch");
+            return Vec::new();
+        }
 
         let secret_key = kyber768::SecretKey::from_bytes(secret_key).unwrap();
         let ciphertext = kyber768::Ciphertext::from_bytes(ciphertext).unwrap();
@@ -601,7 +609,8 @@ mod tests {
         println!("\nDetailed encrypted data structure:");
         println!("Ciphertext: {:?}", &encrypted[..kyber768::ciphertext_bytes()]);
         println!("Nonce: {:?}", &encrypted[kyber768::ciphertext_bytes()..kyber768::ciphertext_bytes()+12]);
-        println!("AES ciphertext: {:?}", &encrypted[kyber768::ciphertext_bytes()+12..]);
+        println!("AES data length: {:?}", &encrypted[kyber768::ciphertext_bytes()+12..kyber768::ciphertext_bytes()+16]);
+        println!("AES ciphertext: {:?}", &encrypted[kyber768::ciphertext_bytes()+16..]);
     }
 
     #[test]

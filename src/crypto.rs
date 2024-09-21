@@ -629,12 +629,11 @@ mod tests {
         // Print detailed information about encrypted data structure
         println!("\nDetailed encrypted data structure:");
         println!("Total encrypted length: {}", encrypted.len());
-        println!("Ciphertext length bytes: {:?}", &encrypted[..4]);
-        let ciphertext_len = u32::from_le_bytes(encrypted[..4].try_into().unwrap()) as usize;
+        let ciphertext_len = kyber768::ciphertext_bytes();
         println!("Ciphertext length: {}", ciphertext_len);
-        println!("Ciphertext: {:?}", &encrypted[4..4+ciphertext_len]);
-        println!("Nonce: {:?}", &encrypted[4+ciphertext_len..4+ciphertext_len+12]);
-        println!("AES ciphertext: {:?}", &encrypted[4+ciphertext_len+12..]);
+        println!("Ciphertext: {:?}", &encrypted[..ciphertext_len]);
+        println!("Nonce: {:?}", &encrypted[ciphertext_len..ciphertext_len+12]);
+        println!("AES ciphertext: {:?}", &encrypted[ciphertext_len+12..]);
 
         let decrypted = PostQuantumCrypto::decrypt(&encrypted, &secret_key);
         println!("Decrypted message: {:?}", decrypted);

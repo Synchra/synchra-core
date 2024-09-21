@@ -198,11 +198,11 @@ impl FractalCipher {
     }
 
     fn byte_to_complex(&self, byte: u8) -> Complex64 {
-        Complex64::new(byte as f64 / 128.0 - 1.0, 0.0)
+        Complex64::new(byte as f64 / 255.0, 0.0)
     }
 
     fn complex_to_byte(&self, c: Complex64) -> u8 {
-        ((c.re + 1.0) * 128.0).round() as u8
+        (c.re.clamp(0.0, 1.0) * 255.0).round() as u8
     }
 
     fn bytes_to_complex(&self, bytes: &[u8]) -> Complex64 {
